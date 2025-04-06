@@ -261,7 +261,7 @@ def create_trade():
                 UPDATE orders
                 SET amount_filled = amount_filled + %s
                 WHERE id = %s
-            """, (actual_fill, new_order_id))
+            """, (actual_sell, new_order_id))
             
             # 5. Execute the trade            
 
@@ -293,14 +293,6 @@ def create_trade():
                 SET amount = amount - %s
                 WHERE uuid = %s AND world = %s AND item = %s
             """, (actual_sell, seller_uuid, data['world'], data['buy_item']))
-
-            # 6. Update order statuses
-            # For matched order
-            cursor.execute("""
-                UPDATE orders
-                SET amount_filled = amount_filled + %s
-                WHERE id = %s
-            """, (actual_fill, order_id))
 
             # For our new order
             total_filled += actual_fill
