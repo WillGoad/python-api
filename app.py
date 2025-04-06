@@ -219,7 +219,8 @@ def create_trade():
         for (order_id, seller_uuid, match_buy, match_sell, match_filled) in matches:
             if remaining <= 0:
                 break
-            
+            print(f"Match Buy: {match_buy}")
+            print(f"Match Sell: {match_sell}")
             # Calculate GCD-based trade unit
             ratio_gcd = gcd(match_buy, match_sell) //2
             if ratio_gcd == 0:
@@ -234,13 +235,21 @@ def create_trade():
             max_units_seller = (data['sell_amount'] - total_filled) // unit_sell
 
             max_units = min(max_units_match, max_units_buyer, max_units_seller)
-            
+            print(f"unit_buy: {unit_buy}")
+            print(f"unit_sell: {unit_sell}")
+            print(f"match_remaining: {match_remaining}")
+            print(f"max_units_match: {max_units_match}")
+            print(f"max_units_buyer: {max_units_buyer}")
+            print(f"max_units_seller: {max_units_seller}")
+            print(f"max_units: {max_units}")
             if max_units < 1:
                 continue
 
             actual_fill = unit_buy * max_units
             actual_sell = unit_sell * max_units
-            print(f"unit_buy: {unit_buy}, unit_sell: {unit_sell}, match_remaining: {match_remaining}, max_units_match: {max_units_match}, max_units_buyer: {max_units_buyer}, max_units_seller: {max_units_seller}, max_units: {max_units}, actual_fill: {actual_fill}, actual_sell: {actual_sell}")
+            
+            print(f"actual_fill: {actual_fill}")
+            print(f"actual_sell: {actual_sell}")
             # Update the matched order's filled amount
             cursor.execute("""
                 UPDATE orders
