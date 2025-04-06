@@ -213,7 +213,6 @@ def create_trade():
         
         matches = cursor.fetchall()
         remaining = data['buy_amount']  # How much we still need to buy
-        print(f"Matches", {matches})
         # 4. Process matches
         total_filled = 0
         for (order_id, seller_uuid, match_buy, match_sell, match_filled) in matches:
