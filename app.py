@@ -302,6 +302,7 @@ def create_trade():
         return jsonify({"success": True, "filled": data['buy_amount'] - remaining_buy})
 
     except Exception as e:
+        print(f"Error: {e} ")
         if conn:
             conn.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
