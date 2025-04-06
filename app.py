@@ -219,14 +219,14 @@ def create_trade():
         for (order_id, seller_uuid, match_buy, match_sell, match_filled) in matches:
             if remaining <= 0:
                 break
-            print(f"Match Buy: {match_buy}")
-            print(f"Match Sell: {match_sell}")
+            print(f"Match Buy: {match_buy}") # 30
+            print(f"Match Sell: {match_sell}") # 2
             # Calculate GCD-based trade unit
-            ratio_gcd = gcd(match_buy, match_sell) //2
+            ratio_gcd = gcd(match_buy, match_sell) # 1 
             if ratio_gcd == 0:
                 continue
             print(f"ratio_gcd: {ratio_gcd} ")
-            unit_buy = match_buy // ratio_gcd  # 7 → 7
+            unit_buy = match_buy // ratio_gcd  # 30 // 1 
             unit_sell = match_sell // ratio_gcd  # 13 → 13
             
             match_remaining = match_buy - match_filled
