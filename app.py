@@ -221,17 +221,17 @@ def create_trade():
             print(f"Match Buy: {match_buy}") # 30
             print(f"Match Sell: {match_sell}") # 2
             # Calculate GCD-based trade unit
-            ratio_gcd = gcd(match_buy, match_sell) # 1 
+            ratio_gcd = gcd(match_buy, match_sell) # 2
             if ratio_gcd == 0:
                 continue
             print(f"ratio_gcd: {ratio_gcd} ")
-            unit_buy = match_buy // ratio_gcd  # 30 // 1 
-            unit_sell = match_sell // ratio_gcd  # 13 → 13
+            unit_buy = match_buy // ratio_gcd  # 30 // 2 = 15
+            unit_sell = match_sell // ratio_gcd  # 2 // 2 = 1
             
-            match_remaining = match_buy - match_filled
-            max_units_match = match_remaining // unit_buy
-            max_units_buyer = remaining // unit_buy
-            max_units_seller = (data['sell_amount'] - total_filled) // unit_sell
+            match_remaining = match_buy - match_filled # 30 - 0 = 30
+            max_units_match = match_remaining // unit_buy # 30 // 15 = 2
+            max_units_buyer = remaining // unit_sell # 
+            max_units_seller = (data['sell_amount'] - total_filled) // unit_buy
 
             max_units = min(max_units_match, max_units_buyer, max_units_seller)
             print(f"unit_buy: {unit_buy}")
@@ -306,8 +306,8 @@ def create_trade():
             total_filled += actual_fill
             remaining -= actual_fill
 
-        # Update status for both orders
-            for oid in [order_id, new_order_id]:
+            # Update status for both orders
+            for oid in [order_id]:
                 cursor.execute("""
                     UPDATE orders
                     SET status = CASE
@@ -317,6 +317,16 @@ def create_trade():
                     END
                     WHERE id = %s
                 """, (oid,))
+        
+        cursor.execute("""
+            UPDATE orders
+            SET status = CASE
+                WHEN amount_filled >= amount_to_buy THEN 'filled'
+                WHEN amount_filled > 0 THEN 'partial'
+                ELSE 'unfilled'
+            END
+            WHERE id = %s
+        """, (new_order_id,))
 
         conn.commit()
         return jsonify({
