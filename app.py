@@ -55,6 +55,7 @@ def withdraw():
     
     try:
         conn = postgres_pool.getconn()
+        conn.autocommit = False 
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -86,6 +87,7 @@ def withdraw():
         conn.commit()
         return jsonify({"success": True})
     except Exception as e:
+        conn.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
         print(f"[WITHDRAW] {uuid} withdraws {amount}x {item}")
@@ -138,7 +140,7 @@ def get_order_book():
             FROM orders 
             WHERE item_to_buy = %s AND item_to_sell = %s AND status != 'filled'
             ORDER BY (amount_to_sell::FLOAT / amount_to_buy) DESC
-        """, (item_to_buy, item_to_sell))
+        """, (item_to_sell, item_to_buy))
         bids = cursor.fetchall()
         
         return jsonify({
@@ -152,34 +154,163 @@ def get_order_book():
 @app.route('/exchange/trade', methods=['POST'])
 def create_trade():
     data = request.json
-    # Implement order matching logic here
-    # This is simplified - you'll need proper transaction handling
+    conn = None
     try:
         conn = postgres_pool.getconn()
         cursor = conn.cursor()
+        conn.autocommit = False  # Start transaction
+
+        # 1. Verify available balance for seller's item (with reservations)
+        cursor.execute("""
+            SELECT 
+                COALESCE(b.amount, 0) - COALESCE(SUM(o.amount_to_sell), 0) as available
+            FROM bank b
+            LEFT JOIN orders o 
+                ON o.uuid = b.uuid 
+                AND o.world = b.world 
+                AND o.item_to_sell = b.item
+                AND o.status != 'filled'
+            WHERE b.uuid = %s
+                AND b.world = %s
+                AND b.item = %s
+            GROUP BY b.amount
+        """, (data['uuid'], data['world'], data['sell_item']))
         
-        # Insert new order
+        result = cursor.fetchone()
+        available = result[0] if result else 0
+        if available < data['sell_amount']:
+            return jsonify({
+                "success": False,
+                "error": f"Insufficient {data['sell_item']} (available: {available})"
+            }), 400
+
+        # 2. Create new order
         cursor.execute("""
             INSERT INTO orders 
             (uuid, world, item_to_buy, item_to_sell, amount_to_buy, amount_to_sell)
             VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
         """, (data['uuid'], data['world'], data['buy_item'], 
              data['sell_item'], data['buy_amount'], data['sell_amount']))
+        new_order_id = cursor.fetchone()[0]
+
+        # 3. Find matching orders (price ascending)
+        cursor.execute("""
+            SELECT id, uuid, amount_to_sell, amount_to_buy,
+                   filled_sell, filled_buy
+            FROM orders
+            WHERE item_to_buy = %s
+                AND item_to_sell = %s
+                AND status != 'filled'
+                AND uuid != %s
+                AND (amount_to_buy * %s <= %s * amount_to_sell)
+            ORDER BY (amount_to_buy::FLOAT / amount_to_sell) ASC
+            FOR UPDATE
+        """, (data['sell_item'], data['buy_item'], data['uuid'],
+             data['sell_amount'], data['buy_amount']))
         
-        # Check for matching orders
-        # Implement matching logic here
-        
+        matches = cursor.fetchall()
+        remaining_buy = data['buy_amount']
+        remaining_sell = data['sell_amount']
+
+        # 4. Process matching orders
+        for (order_id, seller_uuid, ask_amount, bid_amount,
+             filled_sell, filled_buy) in matches:
+            if remaining_buy <= 0:
+                break
+
+            # Calculate fillable amounts
+            seller_available = ask_amount - filled_sell
+            buy_possible = min(remaining_buy, seller_available)
+            
+            # Calculate required sell amount at match's exchange rate
+            required_sell = (buy_possible * bid_amount) // ask_amount
+            required_sell = min(required_sell, remaining_sell)
+            
+            if required_sell <= 0:
+                continue
+
+            # Adjust buy_possible based on actual sell amount available
+            actual_buy = (required_sell * ask_amount) // bid_amount
+            actual_buy = min(actual_buy, buy_possible)
+            actual_sell = required_sell
+
+            # 5. Execute trade
+            # Deduct from seller's item_to_sell (buy_item)
+            cursor.execute("""
+                UPDATE bank
+                SET amount = amount - %s
+                WHERE uuid = %s AND world = %s AND item = %s
+            """, (actual_buy, seller_uuid, data['world'], data['buy_item']))
+
+            # Add to buyer's item_to_buy
+            cursor.execute("""
+                INSERT INTO bank (uuid, world, item, amount)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (uuid, world, item) DO UPDATE
+                SET amount = bank.amount + EXCLUDED.amount
+            """, (data['uuid'], data['world'], data['buy_item'], actual_buy))
+
+            # Deduct from buyer's item_to_sell
+            cursor.execute("""
+                UPDATE bank
+                SET amount = amount - %s
+                WHERE uuid = %s AND world = %s AND item = %s
+            """, (actual_sell, data['uuid'], data['world'], data['sell_item']))
+
+            # Add to seller's item_to_buy (sell_item)
+            cursor.execute("""
+                INSERT INTO bank (uuid, world, item, amount)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (uuid, world, item) DO UPDATE
+                SET amount = bank.amount + EXCLUDED.amount
+            """, (seller_uuid, data['world'], data['sell_item'], actual_sell))
+
+            # 6. Update order statuses
+            # Update matched order
+            cursor.execute("""
+                UPDATE orders
+                SET filled_sell = filled_sell + %s,
+                    filled_buy = filled_buy + %s
+                WHERE id = %s
+            """, (actual_buy, actual_sell, order_id))
+
+            # Update new order
+            cursor.execute("""
+                UPDATE orders
+                SET filled_sell = filled_sell + %s,
+                    filled_buy = filled_buy + %s
+                WHERE id = %s
+            """, (actual_sell, actual_buy, new_order_id))
+
+            # Update remaining amounts
+            remaining_buy -= actual_buy
+            remaining_sell -= actual_sell
+
+        # 7. Final status updates
+        cursor.execute("""
+            UPDATE orders
+            SET status = CASE
+                WHEN filled_sell >= amount_to_sell THEN 'filled'
+                WHEN filled_sell > 0 THEN 'partial'
+                ELSE 'unfilled'
+            END
+            WHERE id = %s
+        """, (new_order_id,))
+
         conn.commit()
-        return jsonify({"success": True})
+        return jsonify({"success": True, "filled": data['buy_amount'] - remaining_buy})
+
     except Exception as e:
+        if conn:
+            conn.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
-        cursor.close()
-        postgres_pool.putconn(conn)
+        if cursor: cursor.close()
+        if conn: postgres_pool.putconn(conn)
 
 @app.route('/exchange/orders', methods=['GET'])
 def get_user_orders():
-    uuid = request.args.get('uuid')
     world = request.args.get('world')
     target_item = request.args.get('item')
     
@@ -197,11 +328,10 @@ def get_user_orders():
                 amount_filled,
                 status
             FROM orders
-            WHERE uuid = %s
-            AND world = %s
+            WHERE world = %s
             AND (item_to_buy = %s OR item_to_sell = %s)
             AND status != 'filled'
-        """, (uuid, world, target_item, target_item))
+        """, (world, target_item, target_item))
         
         orders = cursor.fetchall()
         
