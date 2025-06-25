@@ -180,7 +180,8 @@ def create_trade():
             GROUP BY b.amount
         """, (data['uuid'], data['world'], data['sell_item']))
         
-        available = cursor.fetchone()[0] or 0
+        result = cursor.fetchone()
+        available = result[0] if result else 0
         if available < data['sell_amount']:
             return jsonify({
                 "success": False,
